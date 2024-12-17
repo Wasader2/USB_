@@ -1,0 +1,195 @@
+# -*- coding: utf-8 -*-
+import os
+import tkinter as tk
+from tkinter import messagebox
+import ctypes
+from ctypes import wintypes
+from cryptography.fernet import Fernet
+import subprocess
+
+# Определение необходимых констант
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+OPEN_EXISTING = 3
+FILE_SHARE_READ = 1
+FILE_SHARE_WRITE = 2
+
+
+def is_admin():
+    try:
+        return os.getuid() == 0
+    except AttributeError:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+
+def list_files():
+    drives = [f"{chr(ord('A') + i)}:\\" for i in range(26)]
+    available_drives = [drive for drive in drives if os.path.exists(drive)]
+
+    drive_letter = drive_entry.get()
+    drive_path = f"{drive_letter}\\"
+
+    if not os.path.exists(drive_path):
+        messagebox.showerror("Ошибка", "Диск не найден.")
+    else:
+        files = os.listdir(drive_path)
+        messagebox.showinfo("Список файлов", "\n".join(files))
+
+
+def hide_items(drive_letter):
+    # Скрытие файлов
+    drive_path = f"{drive_letter}\\*"
+    subprocess.call(['attrib', '+h', drive_path])
+
+    # Скрытие папок
+    for item in os.listdir(drive_letter + "\\"):
+        item_path = os.path.join(drive_letter + "\\", item)
+        if os.path.isdir(item_path):
+            subprocess.call(['attrib', '+h', item_path])
+        else:
+            subprocess.call(['attrib', '+h', item_path])
+
+
+def show_items(drive_letter):
+    # Показ файлов
+    drive_path = f"{drive_letter}\\*"
+    subprocess.call(['attrib', '-h', drive_path])
+
+    # Показ папок
+    for item in os.listdir(drive_letter + "\\"):
+        item_path = os.path.join(drive_letter + "\\", item)
+        if os.path.isdir(item_path):
+            subprocess.call(['attrib', '-h', item_path])
+        else:
+            subprocess.call(['attrib', '-h', item_path])
+
+
+def lock_drive():
+    if not is_admin():
+        messagebox.showerror("Ошибка", "Для блокировки диска требуются административные права.")
+        return
+
+    drive_letter = drive_entry.get()
+    password = password_entry.get()
+    confirm_password = confirm_password_entry.get()
+
+    if not password:
+        messagebox.showerror("Ошибка", "Пароль не введён.")
+        return
+
+    if password != confirm_password:
+        messagebox.showerror("Ошибка", "Пароли не совпадают.")
+        return
+
+    key = Fernet.generate_key()
+    cipher_suite = Fernet(key)
+    encrypted_password = cipher_suite.encrypt(password.encode('utf-8'))
+
+    with open("password.key", "wb") as key_file:
+        key_file.write(key)
+    with open("password.enc", "wb") as password_file:
+        password_file.write(encrypted_password)
+
+    drive_path = f"\\\\.\\{drive_letter}"
+    handle = ctypes.windll.kernel32.CreateFileW(
+        drive_path,
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None
+    )
+
+    if handle == wintypes.HANDLE(-1):
+        messagebox.showerror("Ошибка", "Не удалось заблокировать диск.")
+    else:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        hide_items(drive_letter)
+        messagebox.showinfo("Успешно", "Диск заблокирован и файлы и папки скрыты.")
+
+    # Очистка полей ввода пароля
+    password_entry.delete(0, tk.END)
+    confirm_password_entry.delete(0, tk.END)
+
+
+def unlock_drive():
+    if not is_admin():
+        messagebox.showerror("Ошибка", "Для разблокировки диска требуются административные права.")
+        return
+
+    drive_letter = drive_entry.get()
+    password = password_entry.get()
+
+    if not password:
+        messagebox.showerror("Ошибка", "Пароль не введён.")
+        return
+
+    with open("password.key", "rb") as key_file:
+        key = key_file.read()
+    cipher_suite = Fernet(key)
+
+    with open("password.enc", "rb") as password_file:
+        encrypted_password = password_file.read()
+
+    decrypted_password = cipher_suite.decrypt(encrypted_password).decode('utf-8')
+
+    if password != decrypted_password:
+        messagebox.showerror("Ошибка", "Неверный пароль.")
+        return
+
+    drive_path = f"\\\\.\\{drive_letter}"
+    handle = ctypes.windll.kernel32.CreateFileW(
+        drive_path,
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None
+    )
+
+    if handle == wintypes.HANDLE(-1):
+        messagebox.showerror("Ошибка", "Не удалось разблокировать диск.")
+    else:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        show_items(drive_letter)
+        messagebox.showinfo("Успешно", "Диск разблокирован и файлы и папки видимы.")
+
+    # Очистка поля ввода пароля
+    password_entry.delete(0, tk.END)
+
+
+root = tk.Tk()
+root.title("Управление флешкой")
+
+drive_label = tk.Label(root, text="Буква диска:")
+drive_label.pack(pady=10)
+
+drive_entry = tk.Entry(root, width=5)
+drive_entry.pack()
+
+# Поле ввода пароля для блокировки
+password_label = tk.Label(root, text="Пароль для блокировки:")
+password_label.pack(pady=5)
+
+password_entry = tk.Entry(root, show='*')
+password_entry.pack()
+
+# Поле ввода подтверждения пароля
+confirm_password_label = tk.Label(root, text="Подтвердите пароль:")
+confirm_password_label.pack(pady=5)
+
+confirm_password_entry = tk.Entry(root, show='*')
+confirm_password_entry.pack()
+
+list_button = tk.Button(root, text="Список файлов", command=list_files)
+list_button.pack(pady=10)
+
+lock_button = tk.Button(root, text="Заблокировать диск", command=lock_drive)
+lock_button.pack(pady=5)
+
+unlock_button = tk.Button(root, text="Разблокировать диск", command=unlock_drive)
+unlock_button.pack(pady=5)
+
+root.mainloop()
